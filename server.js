@@ -7,10 +7,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-}
+'''const uploadsDir = path.join(__dirname, 'uploads');
+'''if (!fs.existsSync(uploadsDir)) {
+    '''fs.mkdirSync(uploadsDir, { recursive: true });
+}'''
 
 // Middleware
 app.use(express.json());
