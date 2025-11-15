@@ -717,7 +717,6 @@ function stopRecording() {
 
     // Update UI
     isRecording = false;
-    startBtn.disabled = false;
     stopBtn.disabled = true;
     downloadBtn.disabled = false;
     userInput.disabled = true;
@@ -1804,7 +1803,6 @@ async function completeSetupFlow(isBypass = false) { // Added isBypass parameter
     cleanupStepResources('screen');
     addInsight('Device setup complete • Camera, microphone, speaker, and screen permissions are ready.');
 
-    // --- DIRECTLY START THE INTERVIEW FLOW (replaces startBtn click) ---
     // Reset flow counters and UI elements
     answeredCount = 0;
     currentQuestionIndex = 0;
