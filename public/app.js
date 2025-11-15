@@ -2077,103 +2077,103 @@ Guidelines:
 }
 
 // Generate question using backend API (secure - API key stays on server)
-async function generateWithBackendAPI(answerText) {
-    const response = await fetch('/api/generate-question', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ answerText })
-    });
+    async function generateWithBackendAPI(answerText) {
+        const response = await fetch('https://interview-chatbot-grou.onrender.com/api/generate-question', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ answerText })
+        });
 
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMsg = errorData.message || errorData.error || '';
-        
-        if (response.status === 429) {
-            throw new Error(`API quota exceeded (429). ${errorMsg}`);
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const errorMsg = errorData.message || errorData.error || '';
+            
+            if (response.status === 429) {
+                throw new Error(`API quota exceeded (429). ${errorMsg}`);
+            }
+            
+            if (response.status === 500 && errorMsg.includes('not configured')) {
+                throw new Error("Gemini API key not configured on server. Please set GEMINI_API_KEY in .env file.");
+            }
+            
+            throw new Error(`API call failed with status: ${response.status}. ${errorMsg}`);
         }
-        
-        if (response.status === 500 && errorMsg.includes('not configured')) {
-            throw new Error("Gemini API key not configured on server. Please set GEMINI_API_KEY in .env file.");
-        }
-        
-        throw new Error(`API call failed with status: ${response.status}. ${errorMsg}`);
+
+        const data = await response.json();
+        return data.question || null;
     }
 
-    const data = await response.json();
-    return data.question || null;
-}
+    // Check API status (API key is now on server, not client)
+    window.getApiStatus = async () => {
+        try {
+            const response = await fetch('https://interview-chatbot-grou.onrender.com/api/generate-question', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ answerText: 'test' })
+            });
+            
+            if (response.status === 500) {
+                const data = await response.json();
+                if (data.error && data.error.includes('not configured')) {
+                    return {
+                        provider: 'gemini',
+                        quotaExceeded: false,
+                        hasApiKey: false,
+                        message: 'API key not configured on server. Set GEMINI_API_KEY in .env file.'
+                    };
+                }
+            }
+            
+            return {
+                provider: 'gemini',
+                quotaExceeded: response.status === 429,
+                hasApiKey: response.status !== 500
+            };
+        } catch (error) {
+            return {
+                provider: 'gemini',
+                quotaExceeded: false,
+                hasApiKey: false,
+                error: error.message
+            };
+        }
+    };
 
-// Check API status (API key is now on server, not client)
-window.getApiStatus = async () => {
-    try {
-        const response = await fetch('/api/generate-question', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ answerText: 'test' })
-        });
+    // Fallback question generator when API fails
+    function useFallbackQuestion(answerText) {
+        let nextQuestion;
+        const lowerAnswer = answerText.toLowerCase();
+        const words = lowerAnswer.split(/\s+/);
         
-        if (response.status === 500) {
-            const data = await response.json();
-            if (data.error && data.error.includes('not configured')) {
-                return {
-                    provider: 'gemini',
-                    quotaExceeded: false,
-                    hasApiKey: false,
-                    message: 'API key not configured on server. Set GEMINI_API_KEY in .env file.'
-                };
+        // Generate contextually relevant questions based on answer
+        const candidateQuestions = [];
+        
+        // Check for Python mentions
+        if (lowerAnswer.includes('python')) {
+            if (!askedQuestions.some(q => q.toLowerCase().includes('python'))) {
+                candidateQuestions.push("You mentioned Python. Can you tell me about a specific Python project you've worked on?");
+                candidateQuestions.push("What Python libraries or frameworks are you most comfortable with?");
+                candidateQuestions.push("Can you explain a Python problem you solved recently?");
             }
         }
         
-        return {
-            provider: 'gemini',
-            quotaExceeded: response.status === 429,
-            hasApiKey: response.status !== 500
-        };
-    } catch (error) {
-        return {
-            provider: 'gemini',
-            quotaExceeded: false,
-            hasApiKey: false,
-            error: error.message
-        };
-    }
-};
-
-// Fallback question generator when API fails
-function useFallbackQuestion(answerText) {
-    let nextQuestion;
-    const lowerAnswer = answerText.toLowerCase();
-    const words = lowerAnswer.split(/\s+/);
-    
-    // Generate contextually relevant questions based on answer
-    const candidateQuestions = [];
-    
-    // Check for Python mentions
-    if (lowerAnswer.includes('python')) {
-        if (!askedQuestions.some(q => q.toLowerCase().includes('python'))) {
-            candidateQuestions.push("You mentioned Python. Can you tell me about a specific Python project you've worked on?");
-            candidateQuestions.push("What Python libraries or frameworks are you most comfortable with?");
-            candidateQuestions.push("Can you explain a Python problem you solved recently?");
+        // Check for SQL mentions
+        if (lowerAnswer.includes('sql')) {
+            if (!askedQuestions.some(q => q.toLowerCase().includes('sql'))) {
+                candidateQuestions.push("You mentioned SQL. What's the most complex SQL query you've written?");
+                candidateQuestions.push("Can you describe a database optimization challenge you've faced?");
+            }
         }
-    }
-    
-    // Check for SQL mentions
-    if (lowerAnswer.includes('sql')) {
-        if (!askedQuestions.some(q => q.toLowerCase().includes('sql'))) {
-            candidateQuestions.push("You mentioned SQL. What's the most complex SQL query you've written?");
-            candidateQuestions.push("Can you describe a database optimization challenge you've faced?");
+        
+        // Check for JavaScript mentions
+        if (lowerAnswer.includes('javascript') || lowerAnswer.includes('js')) {
+            if (!askedQuestions.some(q => q.toLowerCase().includes('javascript'))) {
+                candidateQuestions.push("You mentioned JavaScript. What JavaScript frameworks or libraries have you used?");
+                candidateQuestions.push("Can you explain a JavaScript concept you find interesting?");
+            }
         }
-    }
-    
-    // Check for JavaScript mentions
-    if (lowerAnswer.includes('javascript') || lowerAnswer.includes('js')) {
-        if (!askedQuestions.some(q => q.toLowerCase().includes('javascript'))) {
-            candidateQuestions.push("You mentioned JavaScript. What JavaScript frameworks or libraries have you used?");
-            candidateQuestions.push("Can you explain a JavaScript concept you find interesting?");
-        }
-    }
     
     // Check for project mentions
     if (lowerAnswer.includes('project') || lowerAnswer.includes('built') || lowerAnswer.includes('developed') || 
