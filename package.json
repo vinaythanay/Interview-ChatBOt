@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "build": "echo 'No build step required for static site'",
+    "vercel-build": "echo 'No build step required for static site'"
   },
   "keywords": [
     "interview",

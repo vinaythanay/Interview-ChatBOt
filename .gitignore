@@ -1,8 +1,11 @@
+# Dependencies
+node_modules/
+package-lock.json
+
 # Environment variables
 .env
-
-# Node modules
-node_modules/
+.env.local
+.env.production
 
 # Logs
 *.log
@@ -12,17 +15,15 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Uploads directory (if contains user data)
-uploads/*
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
+# Build outputs
+dist/
+build/
 
-
-
-
-
-
-
-
-
-
-
+# Uploads (if any)
+uploads/

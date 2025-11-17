@@ -20,6 +20,36 @@ if (!fs.existsSync(uploadsDir)) {
 app.use(express.json());
 app.use(express.static(__dirname));
 
+// CORS middleware - Allow requests from Vercel frontend
+app.use((req, res, next) => {
+    // Allow requests from Vercel frontend (update with your Vercel URL)
+    const allowedOrigins = [
+        'http://localhost:3000',
+        'http://localhost:5173',
+        process.env.FRONTEND_URL,
+        'https://*.vercel.app'
+    ].filter(Boolean);
+    
+    const origin = req.headers.origin;
+    if (allowedOrigins.some(allowed => 
+        origin === allowed || 
+        (allowed.includes('*') && origin && origin.includes(allowed.replace('*', '')))
+    )) {
+        res.header('Access-Control-Allow-Origin', origin || '*');
+    } else {
+        res.header('Access-Control-Allow-Origin', '*'); // Fallback for development
+    }
+    
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
+
 // Serve the main page
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
@@ -35,7 +65,10 @@ app.post('/api/generate-question', async (req, res) => {
     try {
         const { answerText } = req.body;
         
+        console.log('API Request received:', { answerText: answerText ? answerText.substring(0, 50) : 'null' });
+        
         if (!answerText) {
+            console.error('No answerText provided');
             return res.status(400).json({ error: 'Answer text is required' });
         }
 
@@ -43,75 +76,144 @@ app.post('/api/generate-question', async (req, res) => {
         
         if (!geminiApiKey) {
             console.error('Gemini API key not found in environment variables');
+            console.error('Available env vars:', Object.keys(process.env).filter(k => k.includes('GEMINI') || k.includes('API')));
             return res.status(500).json({ error: 'Gemini API key not configured on server', message: 'Please set GEMINI_API_KEY in .env file' });
         }
         
-        console.log('Generating question for answer:', answerText.substring(0, 50) + '...');
+        console.log('Gemini API key found, generating question for answer:', answerText.substring(0, 50) + '...');
 
-        const prompt = `
-You are an AI Interviewer conducting a technical interview. Ask the next interview question based on the candidate's last answer.
+        const prompt = `You are an AI Interviewer. Ask ONE short question based on this answer: "${answerText}"
 
-Candidate's last answer:
-"${answerText}"
+Rules: ONE question only. No greetings. Be direct. Keep it under 15 words.`;
 
-IMPORTANT RULES:
-1. Ask ONLY ONE question at a time
-2. Be conversational and natural
-3. NO greetings, NO "thank you", NO extra comments - just the question
-4. Make the question DIRECTLY relevant to what the candidate just said
-5. If they mentioned skills (Python, SQL, JavaScript), ask about those specifically
-6. If they mentioned projects, ask for details about those projects
-7. If they mentioned experience, ask about specific challenges or outcomes
-8. Keep it short (max 2 sentences)
-9. Do NOT repeat questions you've already asked
-10. Progress the conversation forward - don't ask the same type of question twice
+        // Try multiple model names in order of preference
+        // Prioritize models that don't use thinking tokens (which consume output budget)
+        // Try standard model names first (without -latest suffix)
+        const modelNames = [
+            'gemini-1.5-flash',         // Fast model without thinking tokens
+            'gemini-1.5-pro',           // Pro model without thinking tokens
+            'gemini-1.5-flash-latest',   // Fallback with -latest suffix
+            'gemini-1.5-pro-latest',     // Fallback pro with -latest
+            'gemini-pro',                // Older stable model
+            'gemini-2.5-flash',          // Newer but uses thinking tokens (needs higher limit)
+            'gemini-2.5-pro'             // Newer pro but uses thinking tokens
+        ];
+        
+        let lastError = null;
+        let response = null;
+        let success = false;
+        
+        // Try each model until one works
+        // Try v1beta first (supports more models, may avoid thinking tokens), then v1
+        const apiVersions = ['v1beta', 'v1'];
+        
+        outerLoop: for (const apiVersion of apiVersions) {
+            for (const modelName of modelNames) {
+                try {
+                    const apiUrl = `https://generativelanguage.googleapis.com/${apiVersion}/models/${modelName}:generateContent?key=${geminiApiKey}`;
+                    console.log(`Trying Gemini API (${apiVersion}) with model: ${modelName}`);
+                
+                    response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            contents: [{
+                                parts: [{
+                                    text: prompt
+                                }]
+                            }],
+                        generationConfig: {
+                            temperature: 0.7,
+                            maxOutputTokens: 2000,  // Increased to handle thinking tokens for gemini-2.5 models
+                            topP: 0.95,
+                            topK: 40
+                        }
+                    })
+                    });
 
-Example good questions:
-- "Can you walk me through a specific Python project you worked on?"
-- "What challenges did you face while working with SQL databases?"
-- "Tell me about a time when you had to debug a complex JavaScript issue."
-
-Now ask your next question (ONLY the question, nothing else):
-        `;
-
-        // Use gemini-1.5-flash (faster) or gemini-1.5-pro (more capable)
-        const modelName = 'gemini-1.5-flash'; // Change to 'gemini-1.5-pro' for better quality
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiApiKey}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{
-                        text: prompt
-                    }]
-                }],
-                generationConfig: {
-                    temperature: 0.7,
-                    maxOutputTokens: 150
+                    if (response.ok) {
+                        console.log(`✅ Successfully using model: ${modelName} with API version: ${apiVersion}`);
+                        success = true;
+                        break outerLoop; // Break out of both loops
+                    } else {
+                        const errorData = await response.json().catch(() => ({}));
+                        const errorMsg = errorData.error?.message || '';
+                        lastError = { status: response.status, message: errorMsg };
+                        
+                        // If it's a 404 (model not found), try next model/version
+                        if (response.status === 404) {
+                            console.log(`❌ Model ${modelName} not found (404) with ${apiVersion}, trying next...`);
+                            continue; // Try next model
+                        }
+                        
+                        // For other errors (429, 500, etc.), try next version or break
+                        console.error(`Gemini API error with ${modelName} (${apiVersion}):`, response.status, errorMsg);
+                        if (response.status === 429) {
+                            // Quota exceeded - don't try more
+                            break outerLoop;
+                        }
+                        continue; // Try next model/version
+                    }
+                } catch (fetchError) {
+                    console.error(`Error calling model ${modelName} (${apiVersion}):`, fetchError.message);
+                    lastError = { status: 500, message: fetchError.message };
+                    continue; // Try next model/version
                 }
-            })
-        });
+            }
+        }
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            const errorMsg = errorData.error?.message || '';
+        // If we tried all models and none worked, return error
+        if (!success || !response || !response.ok) {
+            const errorMsg = lastError?.message || 'All model attempts failed';
+            const status = lastError?.status || 500;
             
-            console.error('Gemini API error:', response.status, errorMsg);
+            console.error('Gemini API error after trying all models:', status, errorMsg);
             
-            if (response.status === 429) {
+            if (status === 429) {
                 return res.status(429).json({ error: 'API quota exceeded', message: errorMsg });
             }
             
-            return res.status(response.status).json({ error: 'Gemini API error', message: errorMsg });
+            return res.status(status).json({ error: 'Gemini API error', message: errorMsg });
         }
 
         const data = await response.json();
-        const nextQuestion = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
+        const candidate = data.candidates?.[0];
+        const finishReason = candidate?.finishReason;
+        
+        // Try to get the question text
+        let nextQuestion = candidate?.content?.parts?.[0]?.text?.trim() || null;
+        
+        // If no text but finishReason is MAX_TOKENS, the response was cut off
+        if (!nextQuestion && finishReason === 'MAX_TOKENS') {
+            console.warn('Response was truncated due to MAX_TOKENS. The model used thinking tokens.');
+            console.warn('Usage metadata:', JSON.stringify(data.usageMetadata));
+            
+            // Try to get any partial content that might exist
+            const allParts = candidate?.content?.parts || [];
+            for (const part of allParts) {
+                if (part.text && part.text.trim()) {
+                    nextQuestion = part.text.trim();
+                    console.log('Found partial question from truncated response:', nextQuestion.substring(0, 50));
+                    break;
+                }
+            }
+            
+            // If still no question, return error
+            if (!nextQuestion) {
+                return res.status(500).json({ 
+                    error: 'Response truncated', 
+                    message: 'The generated question was cut off due to token limit. The model used thinking tokens which reduced available output space.' 
+                });
+            }
+        }
         
         if (!nextQuestion) {
             console.error('Empty response from Gemini API:', JSON.stringify(data));
+            console.error('Finish reason:', finishReason);
+            console.error('Candidate data:', JSON.stringify(candidate));
+            
             return res.status(500).json({ error: 'Empty response from Gemini API', message: 'No question generated' });
         }
 
@@ -311,7 +413,21 @@ app.post('/api/validate-sql', async (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
+    console.log(`\n========================================`);
     console.log(`Interview Chatbot server running on http://localhost:${PORT}`);
-    console.log('Make sure to allow camera and microphone permissions when prompted.');
+    console.log(`========================================\n`);
+    
+    // Check if Gemini API key is configured
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    if (geminiApiKey) {
+        console.log('✅ Gemini API key is configured');
+        console.log(`   API Key: ${geminiApiKey.substring(0, 10)}...${geminiApiKey.substring(geminiApiKey.length - 4)}`);
+    } else {
+        console.log('⚠️  WARNING: Gemini API key NOT configured');
+        console.log('   AI question generation will use fallback questions');
+        console.log('   To enable AI questions: Set GEMINI_API_KEY in .env file\n');
+    }
+    
+    console.log('Make sure to allow camera and microphone permissions when prompted.\n');
 });
 
